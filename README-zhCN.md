@@ -76,7 +76,7 @@ jwt:
 ./build.sh
 
 # 启动服务
-./bin/api
+./bin/openaisdk-proxy
 ```
 
 ### API 使用
@@ -130,6 +130,272 @@ curl http://localhost:8080/v1/chat/completions \
 - `compress_user_count`: 压缩时保留最近 N 轮 user/assistant 对话
 - `compress_role_types`: 需要保留的消息角色类型，默认为 user 和 assistant
 
+### 压缩效果示例
+
+假设有一个对话历史包含 10 轮对话，总 Token 数为 80k，配置如下：
+- `compress_enabled`: true
+- `compress_truncate_len`: 50000
+- `compress_user_count`: 3
+
+系统将：
+1. 检测到 80k 超过阈值 50k
+2. 自动保留最近 3 轮用户对话及其对应的助手回复
+3. 移除较早的对话，将 Token 数压缩至约 30-40k 以内
+4. **成本节省**: 原始成本 ÷ 新 Token 数比例 = 成本降低 50-60%
+
+### 实际运行数据
+
+以下是生产环境中的实际日志数据（2026-02-13）：
+
+```
+client IP: 3.209.66.12, model: qn-ch45, model_id: claude-4.5-haiku
+body tokens: 15132 (原tokens: 40730) 
+[CONTEXT] 已截断所有小于第12个user消息的过长文本 (总消息数: 58)
+
+client IP: 52.44.113.131, model: qn-ch45, model_id: claude-4.5-haiku
+body tokens: 15217 (原tokens: 40815)
+[CONTEXT] 已截断所有小于第12个user消息的过长文本 (总消息数: 60)
+
+client IP: 52.44.113.131, model: qn-ch45, model_id: claude-4.5-haiku
+body tokens: 16347 (原tokens: 41945)
+[CONTEXT] 已截断所有小于第12个user消息的过长文本 (总消息数: 78)
+```
+
+**真实压缩效果**：
+- 平均成本节省：**62-63%**
+- 原始 Token 范围：40,730 - 41,945
+- 压缩后 Token 范围：15,132 - 16,347
+- 实际成本降低：约 **3.9 倍** 左右
+
+## 项目结构
+
+```
+.
+├── cmd/api/                    # 后端应用入口
+│   ├── main.go                 # 主程序
+│   ├── config.yaml             # 配置文件
+│   └── internal/
+│       ├── handlers/           # HTTP 请求处理
+│       │   ├── chat.go         # 聊天接口处理
+│       │   ├── models.go       # 模型管理接口
+│       │   └── ...
+│       ├── service/            # 业务逻辑层
+│       ├── repository/         # 数据访问层
+│       ├── models/             # 数据模型
+│       └── cache/              # 缓存管理
+├── frontend/                   # 前端应用
+│   ├── src/
+│   │   ├── views/              # 页面组件
+│   │   ├── components/         # 公共组件
+│   │   └── ...
+│   └── package.json
+├── bin/                        # 构建输出目录
+│   └── openaisdk-proxy         # 可执行文件
+├── build.sh                    # 一键构建脚本
+└── README.md                   # 英文文档
+```
+
+## API 文档
+
+### 1. 聊天完成 API
+
+```bash
+POST /v1/chat/completions
+
+# 请求体示例
+{
+  "model": "prefix-model-alias",
+  "messages": [
+    {"role": "system", "content": "You are a helpful assistant."},
+    {"role": "user", "content": "What is 2+2?"}
+  ],
+  "temperature": 0.7,
+  "max_tokens": 100,
+  "top_p": 0.9,
+  "stream": false
+}
+
+# 响应示例
+{
+  "id": "chatcmpl-xxx",
+  "object": "chat.completion",
+  "created": 1234567890,
+  "model": "prefix-model-alias",
+  "choices": [{
+    "index": 0,
+    "message": {
+      "role": "assistant",
+      "content": "2+2 equals 4."
+    },
+    "finish_reason": "stop"
+  }],
+  "usage": {
+    "prompt_tokens": 20,
+    "completion_tokens": 10,
+    "total_tokens": 30
+  }
+}
+```
+
+### 2. 流式响应
+
+设置 `"stream": true` 以获取流式响应：
+
+```bash
+curl http://localhost:8080/v1/chat/completions \
+  -H "Authorization: Bearer YOUR_API_KEY" \
+  -H "Content-Type: application/json" \
+  -d '{"model": "prefix-model-alias", "messages": [...], "stream": true}'
+```
+
+### 3. 常见参数
+
+| 参数 | 类型 | 说明 |
+|------|------|------|
+| model | string | 模型别名，格式为 `prefix-alias` |
+| messages | array | 消息列表，必须包含 role 和 content |
+| temperature | float | 生成多样性，范围 0-2，默认 0.7 |
+| max_tokens | int | 最大生成 token 数 |
+| top_p | float | 核采样参数，范围 0-1 |
+| stream | bool | 是否流式返回 |
+
+## 常见问题
+
+### Q: 如何添加新模型？
+A: 在管理界面或数据库中配置模型信息，包括模型 ID、别名、厂商等，系统会自动缓存。
+
+### Q: 压缩会丢失重要信息吗？
+A: 压缩策略保留最近的对话历史，只删除较早的内容。可以通过调整 `compress_user_count` 参数来控制保留的对话轮数。
+
+### Q: 如何监控 Token 使用情况？
+A: 在管理界面查看实时日志和统计数据，或通过 API 响应的 `usage` 字段了解每次请求的消耗。
+
+### Q: 支持哪些 LLM 厂商？
+A: 理论上支持所有 OpenAI 兼容的 API，包括但不限于 OpenAI、Azure、Anthropic 等。
+
+### Q: 如何部署到生产环境？
+A: 参考下方部署指南，使用 Docker、Kubernetes 或系统服务管理器（如 systemd）来运行。
+
+## 部署指南
+
+### Docker 部署
+
+```dockerfile
+FROM golang:1.21 AS builder
+WORKDIR /app
+COPY . .
+RUN ./build.sh
+
+FROM ubuntu:22.04
+WORKDIR /app
+COPY --from=builder /app/bin/openaisdk-proxy .
+COPY --from=builder /app/cmd/api/config.yaml .
+EXPOSE 8080
+CMD ["./openaisdk-proxy"]
+```
+
+### Systemd 服务配置
+
+创建文件 `/etc/systemd/system/openaisdk-proxy.service`：
+
+```ini
+[Unit]
+Description=OpenAI SDK Proxy Service
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/openaisdk-proxy
+ExecStart=/opt/openaisdk-proxy/bin/openaisdk-proxy
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
+```
+
+然后运行：
+```bash
+sudo systemctl daemon-reload
+sudo systemctl enable openaisdk-proxy
+sudo systemctl start openaisdk-proxy
+```
+
+### 环境变量配置
+
+支持以下环境变量覆盖配置文件：
+
+```bash
+DB_HOST=localhost
+DB_PORT=3306
+DB_USER=root
+DB_PASSWORD=password
+DB_NAME=model_system
+API_PORT=8080
+JWT_SECRET=your-secret-key
+```
+
+## 性能优化建议
+
+1. **数据库优化**
+   - 为 `api_keys` 和 `models` 表创建索引
+   - 定期清理旧日志数据
+   - 使用连接池管理数据库连接
+
+2. **缓存优化**
+   - 定期刷新模型缓存
+   - 合理设置 Token 压缩阈值
+   - 监控缓存命中率
+
+3. **API 调用优化**
+   - 使用连接复用和 Keep-Alive
+   - 设置合理的超时时间
+   - 实现重试机制和熔断保护
+
+## 贡献指南
+
+欢迎提交 Issue 和 Pull Request！
+
+### 开发环境设置
+
+```bash
+# 克隆项目
+git clone https://github.com/liliangshan/openaisdk-proxy.git
+cd openaisdk-proxy
+
+# 安装依赖
+go mod download
+cd frontend && npm install
+
+# 运行开发服务
+./build.sh
+
+# 启动
+./bin/openaisdk-proxy
+```
+
+### 代码规范
+
+- Go 代码遵循 `gofmt` 规范
+- 前端使用 Vue 3 + TypeScript
+- 提交前运行 `go vet` 和 `gofmt`
+
+## 性能数据
+
+| 场景 | Token 数（优化前） | Token 数（优化后） | 成本节省 |
+|------|-------------------|-------------------|--------|
+| 典型项目对话 | 40,730 | 15,132 | 62.9% |
+| 长会话场景 | 41,945 | 16,347 | 61.0% |
+| 实时代码审查 | 41,024 | 15,426 | 62.4% |
+
 ## License
 
 MIT
+
+---
+
+## GitHub 项目
+
+- [openaisdk-proxy](https://github.com/liliangshan/openaisdk-proxy)
+- [Releases](https://github.com/liliangshan/openaisdk-proxy/releases)

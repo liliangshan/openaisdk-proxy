@@ -37,7 +37,7 @@
         style="width: 100%"
       >
         <el-table-column prop="id" label="ID" width="80" />
-        <el-table-column prop="display_name" label="源ID" width="180" />
+        <el-table-column prop="model_id" label="源ID" width="180" />
         <el-table-column label="前缀+别名" width="220">
           <template #default="{ row }">
             <el-input
@@ -387,7 +387,7 @@ const handleDelete = async (model: ModelWithDetails) => {
 
 // 获取完整的模型ID（厂商前缀-模型ID）
 const getModelFullID = (model: ModelWithDetails): string => {
-  return `${model.provider_api_prefix}-${model.model_id}`
+  return `${model.provider_api_prefix}-${model.display_name}`
 }
 
 // 复制模型ID

@@ -7,9 +7,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"os"
 	"strings"
+	"time"
 
 	"github.com/labstack/echo/v4"
 	"github.com/model-system/api/internal/cache"
@@ -19,9 +21,36 @@ import (
 // 全局 tokenizer 实例
 var globalTokenizer tokenizer.Codec
 
+// 全局 HTTP 客户端，复用连接池
+var globalHTTPClient *http.Client
+
+func init() {
+	// 初始化全局 HTTP 客户端，配置连接池参数
+	transport := &http.Transport{
+		MaxIdleConns:        100,              // 全局空闲连接数
+		MaxIdleConnsPerHost: 10,               // 每个 host 的空闲连接数
+		IdleConnTimeout:     90 * time.Second, // 空闲连接超时
+		DialContext: (&net.Dialer{
+			Timeout:   30 * time.Second,
+			KeepAlive: 30 * time.Second,
+		}).DialContext,
+	}
+	// 注意：SSE 流式请求不能设置整体超时，由 context 控制
+	// 这里设置的超时只适用于普通请求
+	globalHTTPClient = &http.Client{
+		Transport: transport,
+		Timeout:   300 * time.Second, // 调整为 5 分钟，用于普通请求
+	}
+}
+
 // SetTokenizer 设置全局 tokenizer 实例
 func SetTokenizer(tk tokenizer.Codec) {
 	globalTokenizer = tk
+}
+
+// writeDynamicFile 写入动态调试文件
+func writeDynamicFile(filename string, data []byte) error {
+	return os.WriteFile(filename, data, 0644)
 }
 
 // ChatCompletionRequest OpenAI 兼容的聊天补全请求
@@ -167,34 +196,12 @@ func MarshalMessagesToJSON(messages []ChatMessage) json.RawMessage {
 		return json.RawMessage("[]")
 	}
 
-	var result []map[string]interface{}
-	//循环 messages
-	for _, msg := range messages {
-		msgMap := make(map[string]interface{})
-
-		// 添加已知字段
-		if msg.Role != "" {
-			msgMap["role"] = msg.Role
-		}
-		if msg.Name != "" {
-			msgMap["name"] = msg.Name
-		}
-		msgMap["content"] = json.RawMessage(msg.Content)
-		if msg.ToolCallID != nil {
-			msgMap["tool_call_id"] = msg.ToolCallID
-		}
-		if msg.ToolCalls != nil {
-			msgMap["tool_calls"] = msg.ToolCalls
-		}
-
-		// 添加未知字段
-		for key, value := range msg.Extra {
-			msgMap[key] = value
-		}
-		result = append(result, msgMap)
-
+	// 直接序列化，复用 ChatMessage.MarshalJSON 逻辑
+	resultBytes, err := json.Marshal(messages)
+	if err != nil {
+		// 如果序列化失败，返回空数组
+		return json.RawMessage("[]")
 	}
-	resultBytes, _ := json.Marshal(result)
 	return resultBytes
 }
 
@@ -304,10 +311,18 @@ func truncateLongTexts(messages []ChatMessage, userCount int, truncateLen int, r
 		}
 	}
 
+	// 从前往后找到第一个包含 ToolCalls（模型决定调用工具）的 assistant 消息索引
+	targetToolIndex := -1
+	for i := 0; i < len(messages); i++ {
+		if messages[i].Role == "assistant" && messages[i].ToolCalls != nil {
+			targetToolIndex = i
+			break
+		}
+	}
+
 	// 从后往前找到第N个 user 角色的消息，获取其索引
 	count := 0
 	targetMsgIndex := -1
-	targetToolIndex := -1
 	for i := len(messages) - 1; i >= 0; i-- {
 		if messages[i].Role == "user" {
 			count++
@@ -321,16 +336,11 @@ func truncateLongTexts(messages []ChatMessage, userCount int, truncateLen int, r
 	if targetMsgIndex == -1 {
 		return messages, ""
 	}
-	if targetToolIndex > targetMsgIndex {
+	// 如果没有工具调用或工具调用在目标消息之后，则无需截断
+	if targetToolIndex == -1 || targetToolIndex > targetMsgIndex {
 		return messages, ""
 	}
-	// 从前往后找到第一个包含 ToolCalls（模型决定调用工具）的 assistant 消息索引
-	for i := 0; i < len(messages); i++ {
-		if messages[i].Role == "assistant" && messages[i].ToolCalls != nil {
-			targetToolIndex = i
-			break
-		}
-	}
+
 	// 循环所有消息，截断在 targetToolIndex 和 targetMsgIndex 之间的消息的过长 text
 	modified := false
 	for i := range messages {
@@ -340,7 +350,7 @@ func truncateLongTexts(messages []ChatMessage, userCount int, truncateLen int, r
 		if i >= targetMsgIndex {
 			continue // 只截断小于目标索引的消息
 		}
-		if targetToolIndex > 0 && i < targetToolIndex {
+		if i < targetToolIndex {
 			continue // 只截断大于等于工具调用索引的消息
 		}
 		// 只截断指定类型消息的 text
@@ -365,7 +375,10 @@ func truncateLongTexts(messages []ChatMessage, userCount int, truncateLen int, r
 		}
 
 		if modified {
-			newContent, _ := json.Marshal(content)
+			newContent, err := json.Marshal(content)
+			if err != nil {
+				continue
+			}
 			messages[i].Content = newContent
 		}
 	}
@@ -476,15 +489,6 @@ func (h *Handler) ChatCompletion(c echo.Context) error {
 		})
 	}
 
-	modifiedBody, err := json.Marshal(req)
-	if err != nil {
-		log.Printf("[ERROR] 序列化请求失败: %v", err)
-		return c.JSON(http.StatusInternalServerError, Response{
-			Code:    500,
-			Message: "序列化请求失败",
-		})
-	}
-	body = modifiedBody
 	// 定义日志附加信息字符串
 	var logExtra string
 
@@ -593,20 +597,29 @@ func (h *Handler) ChatCompletion(c echo.Context) error {
 	providerURL := modelItem.ProviderBaseURL + "/chat/completions"
 	providerKey := modelItem.ProviderKey
 
+	// 更新 messages 和 model
 	req.Messages = MarshalMessagesToJSON(messages)
 	req.Model = modelItem.Model.ModelID
+
 	// 直接序列化 req（包含所有已修改的消息和 Extra 字段）
-	providerReqBody, _ := req.MarshalJSON()
+	providerReqBody, err := req.MarshalJSON()
+	if err != nil {
+		log.Printf("[ERROR] 序列化请求失败: %v", err)
+		return c.JSON(http.StatusInternalServerError, Response{
+			Code:    500,
+			Message: "序列化请求失败",
+		})
+	}
 
 	if h.cfg.Debug {
-		go func() {
-			os.WriteFile("providerReqBody.json", providerReqBody, 0644)
+		if err := writeDynamicFile("providerReqBody.json", providerReqBody); err != nil {
+			log.Printf("[WARN] 写入调试文件失败: %v", err)
+		} else {
 			log.Printf("[DEBUG] 序列化请求体: providerReqBody.json")
-		}()
+		}
 	}
 
 	// 发送请求到厂商
-	client := &http.Client{}
 	providerReq, err := http.NewRequest("POST", providerURL, bytes.NewReader(providerReqBody))
 	if err != nil {
 		log.Printf("[ERROR] 创建请求失败: %v", err)
@@ -621,7 +634,7 @@ func (h *Handler) ChatCompletion(c echo.Context) error {
 	providerReq.Header.Set("Authorization", "Bearer "+providerKey)
 
 	// 发送请求
-	resp, err := client.Do(providerReq)
+	resp, err := globalHTTPClient.Do(providerReq)
 	if err != nil {
 		log.Printf("[ERROR] 请求厂商失败: %v", err)
 		return c.JSON(http.StatusBadGateway, Response{
@@ -837,7 +850,7 @@ func (h *Handler) sendProviderRequest(c echo.Context, modelItem *cache.ModelCach
 	providerReqBody, _ := req.MarshalJSON()
 
 	// 发送请求到厂商
-	client := &http.Client{}
+	client := globalHTTPClient
 	providerReq, err := http.NewRequest("POST", providerURL, bytes.NewReader(providerReqBody))
 	if err != nil {
 		c.JSON(http.StatusInternalServerError, Response{

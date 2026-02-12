@@ -55,9 +55,29 @@ func GetCache() *MemoryCache {
 	return cache
 }
 
+// sortModelsByIDDesc 按 ID 降序排序模型切片
+func sortModelsByIDDesc(items []*ModelCacheItem) {
+	sort.Slice(items, func(i, j int) bool {
+		return items[i].Model.ID > items[j].Model.ID
+	})
+}
+
 // generateCacheKey 生成缓存键：厂商前缀-模型别名
 func generateCacheKey(providerPrefix, displayName string) string {
 	return fmt.Sprintf("%s-%s", providerPrefix, displayName)
+}
+
+// newModelCacheItem 创建新的 ModelCacheItem
+func newModelCacheItem(detail models.ModelWithDetails) *ModelCacheItem {
+	return &ModelCacheItem{
+		Model:               detail.Model,
+		ProviderName:        detail.ProviderName,
+		ProviderDisplayName: detail.ProviderDisplayName,
+		ProviderBaseURL:     detail.ProviderBaseURL,
+		ProviderAPIPrefix:   detail.ProviderAPIPrefix,
+		Username:            detail.Username,
+		ProviderKey:         detail.ProviderKey,
+	}
 }
 
 // LoadModels 加载所有模型到缓存
@@ -65,29 +85,21 @@ func (c *MemoryCache) LoadModels(modelDetails []models.ModelWithDetails) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.models = make(map[uint64]*ModelCacheItem)
-	c.modelsByKey = make(map[string]*ModelCacheItem)
+	c.models = make(map[uint64]*ModelCacheItem, len(modelDetails))
+	c.modelsByKey = make(map[string]*ModelCacheItem, len(modelDetails))
 	c.modelsByUser = make(map[uint64]map[uint64]*ModelCacheItem)
 	c.lastUpdate = time.Now()
 
 	for i := range modelDetails {
 		detail := modelDetails[i]
-		item := &ModelCacheItem{
-			Model:              detail.Model,
-			ProviderName:        detail.ProviderName,
-			ProviderDisplayName:  detail.ProviderDisplayName,
-			ProviderBaseURL:      detail.ProviderBaseURL,
-			ProviderAPIPrefix:    detail.ProviderAPIPrefix,
-			Username:            detail.Username,
-			ProviderKey:         detail.ProviderKey,
-		}
+		item := newModelCacheItem(detail)
 
 		// 按ID缓存
 		c.models[detail.ID] = item
 
-	// 按厂商前缀-模型别名缓存
-	cacheKey := generateCacheKey(detail.ProviderAPIPrefix, detail.DisplayName)
-	c.modelsByKey[cacheKey] = item
+		// 按厂商前缀-模型别名缓存
+		cacheKey := generateCacheKey(detail.ProviderAPIPrefix, detail.DisplayName)
+		c.modelsByKey[cacheKey] = item
 
 		// 按用户分组
 		if _, ok := c.modelsByUser[detail.UserID]; !ok {
@@ -102,15 +114,7 @@ func (c *MemoryCache) AddModel(model *models.ModelWithDetails) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	item := &ModelCacheItem{
-		Model:              model.Model,
-		ProviderName:        model.ProviderName,
-		ProviderDisplayName:  model.ProviderDisplayName,
-		ProviderBaseURL:      model.ProviderBaseURL,
-		ProviderAPIPrefix:    model.ProviderAPIPrefix,
-		Username:            model.Username,
-		ProviderKey:         model.ProviderKey,
-	}
+	item := newModelCacheItem(*model)
 
 	// 按ID缓存
 	c.models[model.ID] = item
@@ -143,15 +147,7 @@ func (c *MemoryCache) UpdateModel(model *models.ModelWithDetails) {
 		delete(c.modelsByKey, oldCacheKey)
 	}
 
-	item := &ModelCacheItem{
-		Model:              model.Model,
-		ProviderName:        model.ProviderName,
-		ProviderDisplayName:  model.ProviderDisplayName,
-		ProviderBaseURL:      model.ProviderBaseURL,
-		ProviderAPIPrefix:    model.ProviderAPIPrefix,
-		Username:            model.Username,
-		ProviderKey:         model.ProviderKey,
-	}
+	item := newModelCacheItem(*model)
 
 	// 按ID缓存
 	c.models[model.ID] = item
@@ -227,9 +223,7 @@ func (c *MemoryCache) GetModelsByUser(userID uint64) []*ModelCacheItem {
 			result = append(result, m)
 		}
 		// 按 ID 降序排序，保持与数据库查询一致
-		sort.Slice(result, func(i, j int) bool {
-			return result[i].Model.ID > result[j].Model.ID
-		})
+		sortModelsByIDDesc(result)
 		return result
 	}
 	return nil
@@ -245,9 +239,7 @@ func (c *MemoryCache) GetAllModels() []*ModelCacheItem {
 		result = append(result, m)
 	}
 	// 按 ID 降序排序，保持与数据库查询一致
-	sort.Slice(result, func(i, j int) bool {
-		return result[i].Model.ID > result[j].Model.ID
-	})
+	sortModelsByIDDesc(result)
 	return result
 }
 
@@ -277,12 +269,12 @@ func (c *MemoryCache) LoadAPIKeys(apiKeysWithUsers []models.APIKeyWithUser) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	c.apiKeys = make(map[string]*APIKeyCacheItem)
+	c.apiKeys = make(map[string]*APIKeyCacheItem, len(apiKeysWithUsers))
 	for _, item := range apiKeysWithUsers {
 		c.apiKeys[item.APIKey] = &APIKeyCacheItem{
 			UserID:  item.UserID,
 			Prompt:  item.Prompt,
-			Prompts: make(map[string]string),
+			Prompts: make(map[string]string), // 预分配以避免后续动态扩展
 		}
 	}
 }
@@ -354,7 +346,7 @@ func (c *MemoryCache) GetAPIKeyCount() int {
 	return len(c.apiKeys)
 }
 
-// AddAPIKeyPrompt 添加API密钥工具提示词到缓存
+// AddAPIKeyPrompt 添加或更新 API 密钥工具提示词缓存
 func (c *MemoryCache) AddAPIKeyPrompt(apiKey string, toolName string, prompt string) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -367,17 +359,10 @@ func (c *MemoryCache) AddAPIKeyPrompt(apiKey string, toolName string, prompt str
 	}
 }
 
-// UpdateAPIKeyPrompt 更新API密钥工具提示词缓存
+// UpdateAPIKeyPrompt 已弃用，请使用 AddAPIKeyPrompt
+// 保留此方法向后兼容
 func (c *MemoryCache) UpdateAPIKeyPrompt(apiKey string, toolName string, prompt string) {
-	c.mu.Lock()
-	defer c.mu.Unlock()
-
-	if item, ok := c.apiKeys[apiKey]; ok {
-		if item.Prompts == nil {
-			item.Prompts = make(map[string]string)
-		}
-		item.Prompts[toolName] = prompt
-	}
+	c.AddAPIKeyPrompt(apiKey, toolName, prompt)
 }
 
 // DeleteAPIKeyPrompt 删除API密钥工具提示词缓存
