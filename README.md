@@ -14,9 +14,9 @@ In large language model (LLM) application development, context window limitation
 
 This tool is designed to solve the pain points mentioned above. It acts as an intelligent proxy layer between your application and the LLM API, significantly reducing costs and improving efficiency through:
 
-**Token Truncation Compression**: When message length exceeds the threshold, automatically remove the earliest conversation content, retaining the most recent N rounds of dialogue. This is a simple but effective compression strategy that avoids forced truncation when context exceeds limits.
+**Token Length Condensation**: When the total message length exceeds the threshold, automatically condense the overly long text content in early messages, while retaining the complete content of the most recent N rounds of dialogue. This is an efficient compression strategy that significantly reduces token consumption while preserving dialogue structure.
 
-**Flexible Compression Policies**: You can customize compression triggers, the number of dialogue rounds to retain, message role types to preserve, and other parameters based on project characteristics and requirements, achieving fine-grained control.
+**Flexible Compression Policies**: You can customize compression triggers, the number of dialogue rounds to retain, message role types to condense, and other parameters based on project characteristics and requirements, achieving fine-grained control.
 
 **Multi-Model & Multi-Provider Support**: Unified management of different AI providers and model configurations, simplifying API calls through aliases without hardcoding complex request parameters in business code.
 
@@ -32,7 +32,7 @@ A lightweight OpenAI-compatible API proxy service with token compression to redu
 
 ### 2. Token Compression
 - Smart conversation compression
-- Automatic truncation of overly long messages
+- Automatic condensation of overly long text
 - Configurable compression policies
 - Context integrity preservation
 
@@ -68,6 +68,33 @@ jwt:
   secret: "your-secret-key"
   expiration: "8760h"
 ```
+
+### Admin Interface
+
+After starting the service, you can access the admin interface via browser for configuration management.
+
+**Access URL**: `http://127.0.0.1:8080/user`
+
+**Usage Process**:
+
+1. **Register Account**
+   - First access to admin interface, click "Register" button
+   - Fill in username, email, password to complete registration
+   - Automatically logged in after successful registration
+
+2. **Login System**
+   - Login using registered account and password
+   - Supports JWT Token auto-renewal
+
+3. **Get API Key**
+   - After login, go to personal center or settings page
+   - Create API Key for interface calls
+   - Each user can create multiple API Keys
+
+4. **Configure Models**
+   - Add AI provider configuration (name, API URL, key, etc.)
+   - Add model configuration (select provider, model ID, set compression parameters, etc.)
+   - Enable Token compression feature to reduce calling costs
 
 ### Build & Run
 
@@ -120,7 +147,7 @@ curl http://localhost:8080/v1/chat/completions \
 
 ### How It Works
 1. Count tokens in request messages
-2. Automatically compress early messages when exceeding threshold
+2. Automatically condense overly long text in early messages when exceeding threshold
 3. Retain the complete content of the most recent N rounds of dialogue, while condensing the text length of earlier messages
 4. Configurable compression parameters
 
@@ -240,7 +267,7 @@ POST /v1/chat/completions
 
 ### 2. Streaming Response
 
-Set `"stream": true` to get streaming response:
+Set `"streamtotal_tokens": ": true` to get streaming response:
 
 ```bash
 curl http://localhost:8080/v1/chat/completions \
