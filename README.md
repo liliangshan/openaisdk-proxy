@@ -120,28 +120,29 @@ curl http://localhost:8080/v1/chat/completions \
 
 ### How It Works
 1. Count tokens in request messages
-2. Automatically compress when exceeding threshold
-3. Retain recent user and assistant conversations
+2. Automatically compress early messages when exceeding threshold
+3. Retain the complete content of the most recent N rounds of dialogue, while condensing the text length of earlier messages
 4. Configurable compression parameters
 
 ### Parameter Description
 - `compress_enabled`: Whether to enable token compression
 - `compress_truncate_len`: Trigger compression when message length exceeds this value (unit: Token)
-- `compress_user_count`: Retain the most recent N rounds of user/assistant dialogue during compression
-- `compress_role_types`: Message role types to retain, defaulting to user and assistant
+- `compress_user_count`: Retain the complete content of the most recent N rounds of dialogue, earlier messages will be condensed
+- `compress_role_types`: Message role types whose text length should be condensed, defaulting to user and assistant
 
 ### Compression Effect Example
 
-Suppose there is a conversation history with 10 rounds of dialogue and a total of 80k tokens, with the following configuration:
+Suppose there is a conversation history with 10 rounds of dialogue and a total of 100 tokens, with the following configuration:
 - `compress_enabled`: true
-- `compress_truncate_len`: 50000
+- `compress_truncate_len`: 10
 - `compress_user_count`: 3
 
 The system will:
-1. Detect that 80k exceeds the threshold of 50k
-2. Automatically retain the most recent 3 rounds of user dialogue and their corresponding assistant responses
-3. Remove earlier conversations, compressing the token count to approximately 30-40k
-4. **Cost savings**: Original cost ÷ New token ratio = Cost reduction of 50-60%
+1. Detect that 100 exceeds the threshold of 10 (unit: Token)
+2. Retain the complete content of the most recent 3 rounds of user dialogue and their corresponding assistant responses
+3. Condense the long text in earlier conversations (truncate overly long content), preserve message structure without deletion
+4. Compress the token count to approximately 10 or less
+5. **Cost savings**: Original cost ÷ New token ratio = Cost reduction of 90%
 
 ### Real-world Performance Data
 

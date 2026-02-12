@@ -120,28 +120,29 @@ curl http://localhost:8080/v1/chat/completions \
 
 ### 工作原理
 1. 统计请求消息 Token 数量
-2. 超过阈值时自动压缩
-3. 保留最近的用户和助手对话
+2. 超过阈值时自动压缩早期消息
+3. 保留最近 N 轮对话的完整消息，同时精简早期消息的文本长度
 4. 可配置压缩参数
 
 ### 参数说明
 - `compress_enabled`: 是否启用 Token 压缩功能
 - `compress_truncate_len`: 消息总长度超过此值时触发压缩（单位：Token）
-- `compress_user_count`: 压缩时保留最近 N 轮 user/assistant 对话
-- `compress_role_types`: 需要保留的消息角色类型，默认为 user 和 assistant
+- `compress_user_count`: 保留最近 N 轮对话的完整内容，其前的消息会被精简
+- `compress_role_types`: 需要精简文本长度的消息角色类型，默认为 user 和 assistant
 
 ### 压缩效果示例
 
-假设有一个对话历史包含 10 轮对话，总 Token 数为 80k，配置如下：
+假设有一个对话历史包含 10 轮对话，总 Token 数为 100，配置如下：
 - `compress_enabled`: true
-- `compress_truncate_len`: 50000
+- `compress_truncate_len`: 10
 - `compress_user_count`: 3
 
 系统将：
-1. 检测到 80k 超过阈值 50k
-2. 自动保留最近 3 轮用户对话及其对应的助手回复
-3. 移除较早的对话，将 Token 数压缩至约 30-40k 以内
-4. **成本节省**: 原始成本 ÷ 新 Token 数比例 = 成本降低 50-60%
+1. 检测到 100 超过阈值 10（单位为 Token）
+2. 保留最近 3 轮用户对话及其对应的助手回复保持完整
+3. 精简较早对话中的超长文本（截断过长内容），保留消息结构不删除
+4. 将 Token 数压缩至约 10 以内
+5. **成本节省**: 原始成本 ÷ 新 Token 数比例 = 成本降低 90%
 
 ### 实际运行数据
 
