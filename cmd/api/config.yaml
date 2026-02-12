@@ -5,10 +5,10 @@ app:
 
 # 数据库配置（MySQL）
 database:
-  host: "sh-cynosdbmysql-grp-cv1drb1a.sql.tencentcdb.com"
+  host: ""
   port: 21610
   username: "openai"
-  password: "uitT46093008"
+  password: ""
   name: "openai"
   charset: "utf8mb4"
   # 连接池配置
