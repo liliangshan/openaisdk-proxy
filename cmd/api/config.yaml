@@ -1,0 +1,33 @@
+# 应用配置
+app:
+  host: "0.0.0.0"
+  port: 28080
+
+# 数据库配置（MySQL）
+database:
+  host: "sh-cynosdbmysql-grp-cv1drb1a.sql.tencentcdb.com"
+  port: 21610
+  username: "openai"
+  password: "uitT46093008"
+  name: "openai"
+  charset: "utf8mb4"
+  # 连接池配置
+  max_open_conns: 25
+  max_idle_conns: 5
+  conn_max_lifetime: 5m
+
+# JWT配置
+jwt:
+  secret: "your-super-secret-jwt-key-change-in-production"
+  expiration: 8760h  # 一年：365天 * 24小时 = 8760小时
+
+# 日志配置
+logging:
+  level: "info"
+  format: "json"
+
+# SSL证书配置
+ssl:
+  enabled: false  # 是否启用SSL
+  cert_file: "./cert/server.crt"  # SSL证书文件路径
+  key_file: "./cert/server.key"  # SSL密钥文件路径

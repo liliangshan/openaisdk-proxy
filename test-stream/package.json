@@ -1,0 +1,10 @@
+{
+  "name": "test-stream",
+  "version": "1.0.0",
+  "description": "测试流式输出",
+  "main": "test-stream.js",
+  "scripts": {
+    "test": "node test-stream.js"
+  },
+  "dependencies": {}
+}
